@@ -1,0 +1,104 @@
+import numpy as np
+import json
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, classification_report
+from sentence_transformers import SentenceTransformer
+import uuid
+from datetime import datetime, timedelta
+import re
+import pytz
+
+
+model_bert = SentenceTransformer('all-MiniLM-L6-v2')
+
+
+def extract_datetime(task):
+    now = datetime.now()
+    task = task.lower()
+
+
+    time_match = re.search(r'\b(\d{1,2})\.(\d{2})\s?(am|pm)\b', task)
+    if time_match:
+        hour, minute, period = int(time_match.group(1)), int(time_match.group(2)), time_match.group(3).upper()
+        if period == "PM" and hour != 12:
+            hour += 12
+        elif period == "AM" and hour == 12:
+            hour = 0
+    else:
+        hour, minute = 9, 0
+
+    if "tomorrow" in task:
+        task_date = now + timedelta(days=1)
+    elif "day after tomorrow" in task:
+        task_date = now + timedelta(days=2)
+    elif "next week" in task:
+        task_date = now + timedelta(weeks=1)
+    else:
+        task_date = now
+
+    event_time = task_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return event_time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+dataset = []
+X_train = [
+    {"id": str(uuid.uuid4()), "task": "I have a meeting tomorrow at 2.00 PM in R.NAGAR", "category": 1},
+    {"id": str(uuid.uuid4()), "task": "Go to a party at 9.00 PM in Downtown", "category": 0},
+    {"id": str(uuid.uuid4()), "task": "Submit the monthly report at 10.00 AM in Office", "category": 1},
+    {"id": str(uuid.uuid4()), "task": "Doctor appointment day after tomorrow at 3.30 PM in Hospital", "category": 0},
+    {"id": str(uuid.uuid4()), "task": "Team meeting next week at 11.00 AM in Conference Room", "category": 1},
+    {"id": str(uuid.uuid4()), "task": "Dinner with family at 8.00 PM in Home", "category": 0},
+    {"id": str(uuid.uuid4()), "task": "Client call at 4.00 PM in Office", "category": 1},
+    {"id": str(uuid.uuid4()), "task": "Go shopping at 6.00 PM in Mall", "category": 0},
+]
+
+dataset.extend(X_train)
+
+
+with open("task_dataset.json", "w") as f:
+    json.dump(dataset, f, indent=4)
+
+
+X_train_embedded = model_bert.encode([item["task"] for item in X_train])
+y_train = [item["category"] for item in X_train]
+
+
+model = LogisticRegression()
+model.fit(X_train_embedded, y_train)
+
+
+def classify_task(task):
+    task_embedded = model_bert.encode([task])
+    prediction = model.predict(task_embedded)
+    category = "Professional" if prediction[0] == 1 else "Personal"
+    return category
+
+
+user_tasks = []
+with open("/content/user.txt", "r") as f:
+    user_tasks = [line.strip() for line in f.readlines() if line.strip()]
+
+
+output_data = []
+for task in user_tasks:
+    category = classify_task(task)
+    event_time = extract_datetime(task)
+
+    output_data.append({
+        "id": str(uuid.uuid4()),
+        "task": task,
+        "time": event_time,
+        "predicted_category": category
+    })
+
+
+with open("output.json", "w") as f:
+    json.dump(output_data, f, indent=4)
+
+for task in user_tasks:
+    print(f"Task: {task} --> Classified as: {classify_task(task)}")
+
+y_pred = model.predict(X_train_embedded)
+accuracy = accuracy_score(y_train, y_pred)
+print(f"Model Accuracy: {accuracy * 100:.2f}%")
+print(classification_report(y_train, y_pred))
